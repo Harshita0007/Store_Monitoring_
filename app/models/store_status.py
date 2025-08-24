@@ -9,7 +9,7 @@ class StoreStatus(Base):
     id = Column(Integer, primary_key=True, index=True)
     store_id = Column(String, nullable=False, index=True)
     timestamp_utc = Column(DateTime, nullable=False, index=True)
-    status = Column(String, nullable=False)  # 'active' or 'inactive'
+    status = Column(String, nullable=False)  
     created_at = Column(DateTime, default=func.now())
 
     def __repr__(self):

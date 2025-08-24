@@ -8,7 +8,7 @@ class BusinessHours(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     store_id = Column(String, nullable=False, index=True)
-    day_of_week = Column(Integer, nullable=False)  # 0=Monday, 6=Sunday
+    day_of_week = Column(Integer, nullable=False)  
     start_time_local = Column(Time, nullable=False)
     end_time_local = Column(Time, nullable=False)
     created_at = Column(DateTime, default=func.now())
