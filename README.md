@@ -46,6 +46,10 @@ The application will start on `http://localhost:8001`
 
 ## Data Files
 
+## Reports
+
+You can view the generated store report [here (CSV)](https://drive.google.com/file/d/1nv02kv20SMM-Nl28sI0yXJgaWQTYyXBS/view?usp=sharing).
+
 The system expects the following CSV files in the `data/` directory:
 
 - `store_status.csv` - Store status records with columns: store_id, timestamp_utc, status

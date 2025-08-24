@@ -63,6 +63,7 @@ class ReportService:
             
             report_data = []
             total_stores = len(store_ids)
+            validation_errors = []
             
             print(f"Generating report for {total_stores} stores...")
             
@@ -72,14 +73,20 @@ class ReportService:
                         store_id, current_time
                     )
                     
+                    # ADDED: Validation to catch mathematical errors
+                    validation_result = self._validate_metrics(store_id, metrics)
+                    if validation_result:
+                        validation_errors.append(validation_result)
+                        print(f"Validation warning for store {store_id}: {validation_result}")
+                    
                     report_data.append({
                         'store_id': store_id,
-                        'uptime_last_hour(in minutes)': round(metrics.uptime_last_hour, 2),
-                        'uptime_last_day(in hours)': round(metrics.uptime_last_day, 2),
-                        'uptime_last_week(in hours)': round(metrics.uptime_last_week, 2),
-                        'downtime_last_hour(in minutes)': round(metrics.downtime_last_hour, 2),
-                        'downtime_last_day(in hours)': round(metrics.downtime_last_day, 2),
-                        'downtime_last_week(in hours)': round(metrics.downtime_last_week, 2)
+                        'uptime_last_hour(in minutes)': metrics.uptime_last_hour,
+                        'uptime_last_day(in hours)': metrics.uptime_last_day,
+                        'uptime_last_week(in hours)': metrics.uptime_last_week,
+                        'downtime_last_hour(in minutes)': metrics.downtime_last_hour,
+                        'downtime_last_day(in hours)': metrics.downtime_last_day,
+                        'downtime_last_week(in hours)': metrics.downtime_last_week
                     })
                     
                     if (idx + 1) % 100 == 0:
@@ -87,6 +94,7 @@ class ReportService:
                         
                 except Exception as e:
                     print(f"Error processing store {store_id}: {e}")
+                    # FIXED: Better error handling with zero values
                     report_data.append({
                         'store_id': store_id,
                         'uptime_last_hour(in minutes)': 0.0,
@@ -96,8 +104,19 @@ class ReportService:
                         'downtime_last_day(in hours)': 0.0,
                         'downtime_last_week(in hours)': 0.0
                     })
+                    validation_errors.append(f"Store {store_id}: Processing failed - {str(e)}")
             
             file_path = await self.csv_writer.write_report(report_id, report_data)
+            
+            # Log validation summary
+            if validation_errors:
+                print(f"\n=== VALIDATION SUMMARY ===")
+                print(f"Total validation issues: {len(validation_errors)}")
+                for error in validation_errors[:10]:  # Show first 10 errors
+                    print(f"  - {error}")
+                if len(validation_errors) > 10:
+                    print(f"  ... and {len(validation_errors) - 10} more issues")
+                print("=" * 30)
             
             await self._update_report_status(report_id, ReportStatus.COMPLETE, file_path)
             
@@ -106,6 +125,44 @@ class ReportService:
         except Exception as e:
             print(f"Error generating report {report_id}: {e}")
             await self._update_report_status(report_id, ReportStatus.FAILED, error_message=str(e))
+
+    def _validate_metrics(self, store_id: str, metrics) -> str:
+        """Validate that metrics make mathematical sense"""
+        
+        # Check if hour totals are reasonable (should be close to 60 minutes for most stores)
+        hour_total = metrics.uptime_last_hour + metrics.downtime_last_hour
+        if hour_total > 60.1 or hour_total < 0:
+            return f"Hour total out of range: {hour_total:.2f} minutes"
+        
+        # Check if day totals are reasonable (should be ≤ 24 hours)
+        day_total = metrics.uptime_last_day + metrics.downtime_last_day
+        if day_total > 24.1 or day_total < 0:
+            return f"Day total out of range: {day_total:.2f} hours"
+        
+        # Check if week totals are reasonable (should be ≤ 168 hours)
+        week_total = metrics.uptime_last_week + metrics.downtime_last_week
+        if week_total > 168.1 or week_total < 0:
+            return f"Week total out of range: {week_total:.2f} hours"
+        
+        # Check for negative values
+        metrics_dict = {
+            'uptime_last_hour': metrics.uptime_last_hour,
+            'uptime_last_day': metrics.uptime_last_day,
+            'uptime_last_week': metrics.uptime_last_week,
+            'downtime_last_hour': metrics.downtime_last_hour,
+            'downtime_last_day': metrics.downtime_last_day,
+            'downtime_last_week': metrics.downtime_last_week
+        }
+        
+        for metric_name, value in metrics_dict.items():
+            if value < 0:
+                return f"Negative value in {metric_name}: {value:.2f}"
+        
+        # Check for suspicious patterns (all zeros)
+        if all(value == 0 for value in metrics_dict.values()):
+            return "All metrics are zero - possible calculation error"
+        
+        return None  # No validation errors
 
     async def _get_max_timestamp(self) -> datetime:
         async with AsyncSessionLocal() as session:

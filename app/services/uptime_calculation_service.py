@@ -39,13 +39,14 @@ class UptimeCalculationService:
             status_observations = await self._get_status_observations(
                 session, store_id, one_week_ago, current_time )
             
-            uptime_last_hour = await self._calculate_uptime_for_period(
+            # FIXED: All calculations now return hours consistently
+            uptime_last_hour_hours = await self._calculate_uptime_for_period(
                 status_observations, business_hours, store_tz, one_hour_ago, current_time )
             
-            uptime_last_day = await self._calculate_uptime_for_period(
+            uptime_last_day_hours = await self._calculate_uptime_for_period(
                 status_observations, business_hours, store_tz, one_day_ago, current_time )
             
-            uptime_last_week = await self._calculate_uptime_for_period(
+            uptime_last_week_hours = await self._calculate_uptime_for_period(
                 status_observations, business_hours, store_tz, one_week_ago, current_time )
             
             total_hours_last_hour = await self._calculate_total_business_hours(
@@ -57,18 +58,24 @@ class UptimeCalculationService:
             total_hours_last_week = await self._calculate_total_business_hours(
                 business_hours, store_tz, one_week_ago, current_time)
             
-            downtime_last_hour = max(0, total_hours_last_hour * 60 - uptime_last_hour)
-            downtime_last_day = max(0, total_hours_last_day - uptime_last_day)
-            downtime_last_week = max(0, total_hours_last_week - uptime_last_week)
+            # FIXED: Consistent unit calculations
+            downtime_last_hour_hours = max(0, total_hours_last_hour - uptime_last_hour_hours)
+            downtime_last_day_hours = max(0, total_hours_last_day - uptime_last_day_hours)
+            downtime_last_week_hours = max(0, total_hours_last_week - uptime_last_week_hours)
             
+            # FIXED: Better rounding to avoid floating point issues
             return UptimeMetrics(
-                uptime_last_hour=uptime_last_hour,
-                uptime_last_day=uptime_last_day,
-                uptime_last_week=uptime_last_week,
-                downtime_last_hour=downtime_last_hour,
-                downtime_last_day=downtime_last_day,
-                downtime_last_week=downtime_last_week
+                uptime_last_hour=self._safe_round(uptime_last_hour_hours * 60, 2),  # Convert to minutes
+                uptime_last_day=self._safe_round(uptime_last_day_hours, 2),
+                uptime_last_week=self._safe_round(uptime_last_week_hours, 2),
+                downtime_last_hour=self._safe_round(downtime_last_hour_hours * 60, 2),  # Convert to minutes
+                downtime_last_day=self._safe_round(downtime_last_day_hours, 2),
+                downtime_last_week=self._safe_round(downtime_last_week_hours, 2)
             )
+
+    def _safe_round(self, value: float, decimals: int = 2) -> float:
+        """Round with better floating point handling"""
+        return round(float(value), decimals)
 
     async def _get_store_timezone(self, session, store_id: str) -> str:
         stmt = select(StoreTimezone).where(StoreTimezone.store_id == store_id)
@@ -124,6 +131,7 @@ class UptimeCalculationService:
         start_time: datetime,
         end_time: datetime
     ) -> float:
+        """FIXED: Always returns hours regardless of period length"""
         
         start_local = start_time.replace(tzinfo=pytz.UTC).astimezone(store_tz)
         end_local = end_time.replace(tzinfo=pytz.UTC).astimezone(store_tz)
@@ -132,10 +140,11 @@ class UptimeCalculationService:
         current_time = start_local
         
         while current_time < end_local:
-            day_end = min(
-                end_local,
-                current_time.replace(hour=23, minute=59, second=59, microsecond=999999)
+            # FIXED: Use proper date boundaries instead of artificial day-end times
+            next_day = (current_time + timedelta(days=1)).replace(
+                hour=0, minute=0, second=0, microsecond=0
             )
+            day_end = min(end_local, next_day)
             
             day_business_hours = self._get_business_hours_for_day(
                 business_hours, current_time.weekday()
@@ -148,15 +157,10 @@ class UptimeCalculationService:
                 )
                 total_uptime += day_uptime
             
-            current_time = (current_time + timedelta(days=1)).replace(
-                hour=0, minute=0, second=0, microsecond=0
-            )
+            current_time = next_day
         
-        period_hours = (end_time - start_time).total_seconds() / 3600
-        if period_hours <= 1:
-            return total_uptime * 60  
-        else:
-            return total_uptime  
+        # FIXED: Always return hours (removed the conditional unit conversion)
+        return total_uptime
 
     def _get_business_hours_for_day(
         self, 
@@ -176,29 +180,31 @@ class UptimeCalculationService:
         day_start: datetime,
         day_end: datetime
     ) -> float:
+        """FIXED: Better handling of overnight business hours"""
         
-        bh_start = day_start.replace(
-            hour=business_hours.start_time_local.hour,
-            minute=business_hours.start_time_local.minute,
-            second=business_hours.start_time_local.second,
-            microsecond=0
-        )
-        bh_end = day_start.replace(
-            hour=business_hours.end_time_local.hour,
-            minute=business_hours.end_time_local.minute,
-            second=business_hours.end_time_local.second,
-            microsecond=0
-        )
+        # Get the date for this calculation
+        calculation_date = day_start.date()
         
+        # Create business hours boundaries for this specific date
+        bh_start = store_tz.localize(datetime.combine(
+            calculation_date, business_hours.start_time_local
+        ))
+        bh_end = store_tz.localize(datetime.combine(
+            calculation_date, business_hours.end_time_local
+        ))
+        
+        # Handle overnight business hours (e.g., 22:00 - 06:00 next day)
         if business_hours.end_time_local <= business_hours.start_time_local:
             bh_end += timedelta(days=1)
         
+        # Find the intersection of business hours with our calculation period
         period_start = max(bh_start, day_start)
         period_end = min(bh_end, day_end)
         
         if period_start >= period_end:
             return 0.0
         
+        # Get observations that fall within business hours for this period
         business_observations = []
         for obs in status_observations:
             obs_local = obs.timestamp_utc.replace(tzinfo=pytz.UTC).astimezone(store_tz)
@@ -206,6 +212,7 @@ class UptimeCalculationService:
                 business_observations.append((obs_local, obs.status))
         
         if not business_observations:
+            # No observations during business hours - assume active (default behavior)
             return (period_end - period_start).total_seconds() / 3600
         
         return self._interpolate_uptime(business_observations, period_start, period_end)
@@ -216,29 +223,43 @@ class UptimeCalculationService:
         period_start: datetime, 
         period_end: datetime
     ) -> float:
-       
+        """FIXED: Improved interpolation logic with better boundary handling"""
+        
+        if not observations:
+            return (period_end - period_start).total_seconds() / 3600
         
         total_duration = (period_end - period_start).total_seconds()
         uptime_seconds = 0.0
         
-        if not observations or observations[0][0] > period_start:
-            first_status = observations[0][1] if observations else 'active'
-            observations.insert(0, (period_start, first_status))
+        # Sort observations by timestamp
+        observations.sort(key=lambda x: x[0])
         
-        if not observations or observations[-1][0] < period_end:
-            last_status = observations[-1][1] if observations else 'active'
-            observations.append((period_end, last_status))
+        # Extend observations to cover the entire period
+        extended_observations = observations.copy()
         
-        for i in range(len(observations) - 1):
-            current_time, current_status = observations[i]
-            next_time, next_status = observations[i + 1]
+        # If first observation is after period start, extend backwards
+        if observations[0][0] > period_start:
+            # Use the first observation's status for the beginning
+            extended_observations.insert(0, (period_start, observations[0][1]))
+        
+        # If last observation is before period end, extend forwards
+        if observations[-1][0] < period_end:
+            # Use the last observation's status for the end
+            extended_observations.append((period_end, observations[-1][1]))
+        
+        # Calculate uptime for each segment
+        for i in range(len(extended_observations) - 1):
+            current_time, current_status = extended_observations[i]
+            next_time, _ = extended_observations[i + 1]
             
-            segment_duration = (next_time - current_time).total_seconds()
+            # Ensure we're within our calculation period
+            segment_start = max(current_time, period_start)
+            segment_end = min(next_time, period_end)
             
-            if current_status == 'active':
-                uptime_seconds += segment_duration
+            if segment_start < segment_end and current_status == 'active':
+                uptime_seconds += (segment_end - segment_start).total_seconds()
         
-        return uptime_seconds / 3600 
+        return uptime_seconds / 3600
 
     async def _calculate_total_business_hours(
         self,
@@ -247,48 +268,56 @@ class UptimeCalculationService:
         start_time: datetime,
         end_time: datetime
     ) -> float:
+        """FIXED: Improved business hours calculation with better date handling"""
         
         start_local = start_time.replace(tzinfo=pytz.UTC).astimezone(store_tz)
         end_local = end_time.replace(tzinfo=pytz.UTC).astimezone(store_tz)
         
         total_hours = 0.0
-        current_time = start_local
+        current_date = start_local.date()
+        end_date = end_local.date()
         
-        while current_time < end_local:
-            day_end = min(
-                end_local,
-                current_time.replace(hour=23, minute=59, second=59, microsecond=999999)
-            )
-            
+        # Process each day in the period
+        while current_date <= end_date:
             day_business_hours = self._get_business_hours_for_day(
-                business_hours, current_time.weekday()
+                business_hours, current_date.weekday()
             )
             
-            if day_business_hours:
-                bh_start = current_time.replace(
-                    hour=day_business_hours.start_time_local.hour,
-                    minute=day_business_hours.start_time_local.minute,
-                    second=day_business_hours.start_time_local.second,
-                    microsecond=0
-                )
-                bh_end = current_time.replace(
-                    hour=day_business_hours.end_time_local.hour,
-                    minute=day_business_hours.end_time_local.minute,
-                    second=day_business_hours.end_time_local.second,
-                    microsecond=0
-                )
-                
-                if day_business_hours.end_time_local <= day_business_hours.start_time_local:
-                    bh_end += timedelta(days=1)
-                
-                period_start = max(bh_start, current_time)
-                period_end = min(bh_end, day_end)
-                
-                if period_start < period_end:
-                    total_hours += (period_end - period_start).total_seconds() / 3600
+            if not day_business_hours:
+                current_date += timedelta(days=1)
+                continue
             
-            current_time = (current_time + timedelta(days=1)).replace(
-                hour=0, minute=0, second=0, microsecond=0
-            )
+            # Create day boundaries
+            day_start = store_tz.localize(datetime.combine(current_date, time.min))
+            day_end = store_tz.localize(datetime.combine(current_date, time.max))
+            
+            # Intersect with the period we're calculating
+            period_start_for_day = max(start_local, day_start)
+            period_end_for_day = min(end_local, day_end)
+            
+            if period_start_for_day >= period_end_for_day:
+                current_date += timedelta(days=1)
+                continue
+            
+            # Calculate business hours for this day
+            bh_start = store_tz.localize(datetime.combine(
+                current_date, day_business_hours.start_time_local
+            ))
+            bh_end = store_tz.localize(datetime.combine(
+                current_date, day_business_hours.end_time_local
+            ))
+            
+            # Handle overnight business hours
+            if day_business_hours.end_time_local <= day_business_hours.start_time_local:
+                bh_end += timedelta(days=1)
+            
+            # Find intersection of business hours with our calculation period for this day
+            effective_start = max(bh_start, period_start_for_day)
+            effective_end = min(bh_end, period_end_for_day)
+            
+            if effective_start < effective_end:
+                total_hours += (effective_end - effective_start).total_seconds() / 3600
+            
+            current_date += timedelta(days=1)
         
         return total_hours
