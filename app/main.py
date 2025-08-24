@@ -10,10 +10,8 @@ from app.services.data_ingestion_service import DataIngestionService
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup
     await init_db()
     
-    # Initialize data ingestion in background (non-blocking)
     async def load_data_background():
         try:
             ingestion_service = DataIngestionService()
@@ -21,12 +19,10 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             print(f"Data ingestion failed: {e}")
     
-    # Start data ingestion in background
     asyncio.create_task(load_data_background())
     
     yield
     
-    # Shutdown
     pass
 
 app = FastAPI(
@@ -36,7 +32,6 @@ app = FastAPI(
     lifespan=lifespan
 )
 
-# Include routers
 app.include_router(report_router, prefix="/api/v1")
 
 @app.get("/health")
