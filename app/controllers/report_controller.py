@@ -10,10 +10,7 @@ report_service = ReportService()
 
 @router.post("/trigger_report")
 async def trigger_report() -> Dict[str, str]:
-    """
-    Trigger report generation from the stored data.
-    Returns a report_id for polling the status.
-    """
+   
     try:
         report_id = await report_service.trigger_report()
         return {"report_id": report_id}
@@ -22,17 +19,6 @@ async def trigger_report() -> Dict[str, str]:
 
 @router.get("/get_report")
 async def get_report(report_id: str):
-    """
-    Get report status or download CSV file if complete.
-    
-    Args:
-        report_id: The report ID returned from trigger_report
-        
-    Returns:
-        - "Running" if report generation is in progress
-        - "Complete" with CSV file download if generation is complete
-        - "Failed" with error message if generation failed
-    """
     try:
         result = await report_service.get_report_status(report_id)
         
