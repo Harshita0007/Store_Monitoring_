@@ -17,14 +17,11 @@ class DataIngestionService:
         self.csv_reader = CsvReader()
 
     async def load_all_data(self):
-        """Load all CSV data into the database"""
         print("Starting data ingestion...")
         
-        # Initialize database first
         from app.config.database import init_db
         await init_db()
         
-        # Load data sequentially to avoid SQLite locking issues
         await self.load_store_status_data()
         await self.load_business_hours_data()
         await self.load_timezone_data()
@@ -32,16 +29,14 @@ class DataIngestionService:
         print("Data ingestion completed!")
 
     async def load_store_status_data(self):
-        """Load store status data from CSV"""
         try:
             df = await self.csv_reader.read_csv("data/store_status.csv")
             
             async with AsyncSessionLocal() as session:
-                # Clear existing data (ignore if table doesn't exist)
                 try:
                     await session.execute(text("DELETE FROM store_status"))
                 except Exception:
-                    pass  # Table might not exist yet
+                    pass  
                 
                 batch_size = 1000
                 total_rows = len(df)
@@ -51,7 +46,6 @@ class DataIngestionService:
                     status_objects = []
                     
                     for _, row in batch.iterrows():
-                        # Parse timestamp
                         timestamp_utc = pd.to_datetime(row['timestamp_utc'])
                         
                         status_obj = StoreStatus(
@@ -71,9 +65,7 @@ class DataIngestionService:
             raise
 
     async def load_business_hours_data(self):
-        """Load business hours data from CSV"""
         try:
-            # Check if file exists
             if not os.path.exists("data/menu_hours.csv"):
                 print("Business hours file not found, stores will be assumed 24/7")
                 return
@@ -81,16 +73,14 @@ class DataIngestionService:
             df = await self.csv_reader.read_csv("data/menu_hours.csv")
             
             async with AsyncSessionLocal() as session:
-                # Clear existing data (ignore if table doesn't exist)
                 try:
                     await session.execute(text("DELETE FROM business_hours"))
                 except Exception:
-                    pass  # Table might not exist yet
+                    pass  
                 
                 business_hours_objects = []
                 
                 for _, row in df.iterrows():
-                    # Parse time strings
                     start_time = datetime.strptime(row['start_time_local'], '%H:%M:%S').time()
                     end_time = datetime.strptime(row['end_time_local'], '%H:%M:%S').time()
                     
@@ -112,9 +102,7 @@ class DataIngestionService:
             raise
 
     async def load_timezone_data(self):
-        """Load timezone data from CSV"""
         try:
-            # Check if file exists
             if not os.path.exists("data/timezones.csv"):
                 print("Timezone file not found, stores will use America/Chicago")
                 return
@@ -122,11 +110,10 @@ class DataIngestionService:
             df = await self.csv_reader.read_csv("data/timezones.csv")
             
             async with AsyncSessionLocal() as session:
-                # Clear existing data (ignore if table doesn't exist)
                 try:
                     await session.execute(text("DELETE FROM store_timezone"))
                 except Exception:
-                    pass  # Table might not exist yet
+                    pass  
                 
                 timezone_objects = []
                 
